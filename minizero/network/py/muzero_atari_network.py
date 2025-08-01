@@ -39,6 +39,43 @@ class MuZeroRepresentationNetwork(nn.Module):
         return x
 
 
+class MuZeroDecoderNetwork(nn.Module):
+    def __init__(self, num_input_channels, num_output_channels, num_blocks):
+        super(MuZeroDecoderNetwork, self).__init__()
+        self.residual_blocks1 = nn.ModuleList([ResidualBlock(num_input_channels) for _ in range(num_blocks)])
+        self.conv_transpose1 = nn.ConvTranspose2d(num_input_channels, num_input_channels, kernel_size=4, stride=2, padding=1)
+        self.residual_blocks2 = nn.ModuleList([ResidualBlock(num_input_channels) for _ in range(1)])
+        self.conv_transpose2 = nn.ConvTranspose2d(num_input_channels, num_input_channels, kernel_size=4, stride=2, padding=1)
+        self.residual_blocks3 = nn.ModuleList([ResidualBlock(num_input_channels) for _ in range(1)])
+        self.bn1 = nn.BatchNorm2d(num_input_channels)
+        self.conv_transpose3 = nn.ConvTranspose2d(num_input_channels, num_input_channels // 2, kernel_size=4, stride=2, padding=1)
+        self.residual_blocks4 = nn.ModuleList([ResidualBlock(num_input_channels // 2) for _ in range(1)])
+        self.bn2 = nn.BatchNorm2d(num_input_channels // 2)
+        self.conv_transpose4 = nn.ConvTranspose2d(num_input_channels // 2, num_output_channels, kernel_size=4, stride=2, padding=1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, encoded_state):
+        x = encoded_state
+        for residual_block in self.residual_blocks1:
+            x = residual_block(x)
+        x = self.conv_transpose1(x)
+        for residual_block in self.residual_blocks2:
+            x = residual_block(x)
+        x = self.conv_transpose2(x)
+        for residual_block in self.residual_blocks3:
+            x = residual_block(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.conv_transpose3(x)
+        for residual_block in self.residual_blocks4:
+            x = residual_block(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.conv_transpose4(x)
+        x = self.sigmoid(x)
+        return x
+
+
 class MuZeroDynamicsNetwork(nn.Module):
     def __init__(self, num_channels, channel_height, channel_width, num_action_feature_channels, num_blocks, reward_size):
         super(MuZeroDynamicsNetwork, self).__init__()
@@ -70,6 +107,44 @@ class MuZeroPredictionNetwork(nn.Module):
         return policy_logit, value_logit
 
 
+class MuZeroConsistencyNetwork(nn.Module):
+    def __init__(self, num_hidden_channels, hidden_channel_height, hidden_channel_width, consistency_params):
+        super(MuZeroConsistencyNetwork, self).__init__()
+        proj_hid, proj_out, pred_hid, pred_out = consistency_params
+        self.projection_in_dim = num_hidden_channels * hidden_channel_height * hidden_channel_width
+        self.projection = nn.Sequential(
+            nn.Linear(self.projection_in_dim, proj_hid),
+            nn.BatchNorm1d(proj_hid),
+            nn.ReLU(),
+            nn.Linear(proj_hid, proj_hid),
+            nn.BatchNorm1d(proj_hid),
+            nn.ReLU(),
+            nn.Linear(proj_hid, proj_out),
+            nn.BatchNorm1d(proj_out),
+        )
+        self.projection_head = nn.Sequential(
+            nn.Linear(proj_out, pred_hid),
+            nn.BatchNorm1d(pred_hid),
+            nn.ReLU(),
+            nn.Linear(pred_hid, pred_out),
+        )
+
+    def forward(self, hidden_state, with_grad_):
+        # return hidden_State
+        # only the branch of proj + pred can share the gradients
+        hidden_state = hidden_state.view(-1, self.projection_in_dim)
+        proj = self.projection(hidden_state)
+
+        # with grad, use proj_head
+        if with_grad_:
+            proj = self.projection_head(proj)
+            # return proj
+            return {"proj": proj}
+        else:
+            # return proj.detach()
+            return {"proj": proj.detach()}
+
+
 class MuZeroAtariNetwork(nn.Module):
     def __init__(self,
                  game_name,
@@ -83,7 +158,10 @@ class MuZeroAtariNetwork(nn.Module):
                  num_blocks,
                  action_size,
                  num_value_hidden_channels,
-                 discrete_value_size):
+                 discrete_value_size,
+                 state_consistency_params,
+                 num_decoder_output_channels,
+                 decoder_output_at_inference):
         super(MuZeroAtariNetwork, self).__init__()
         self.game_name = game_name
         self.num_input_channels = num_input_channels
@@ -97,10 +175,16 @@ class MuZeroAtariNetwork(nn.Module):
         self.action_size = action_size
         self.num_value_hidden_channels = num_value_hidden_channels
         self.discrete_value_size = discrete_value_size
+        self.state_consistency_params = state_consistency_params
+        self.num_decoder_output_channels = num_decoder_output_channels
+        self.decoder_output_at_inference = decoder_output_at_inference
 
         self.representation_network = MuZeroRepresentationNetwork(num_input_channels, num_hidden_channels, num_blocks)
         self.dynamics_network = MuZeroDynamicsNetwork(num_hidden_channels, hidden_channel_height, hidden_channel_height, num_action_feature_channels, num_blocks, discrete_value_size)
         self.prediction_network = MuZeroPredictionNetwork(num_hidden_channels, hidden_channel_height, hidden_channel_width, action_size, num_value_hidden_channels, discrete_value_size)
+        self.consistency_network = MuZeroConsistencyNetwork(num_hidden_channels, hidden_channel_height, hidden_channel_width,
+                                                            state_consistency_params) if state_consistency_params is not None else None
+        self.decoder_network = MuZeroDecoderNetwork(num_hidden_channels, num_decoder_output_channels, num_blocks) if num_decoder_output_channels > 0 else None
 
     @torch.jit.export
     def get_type_name(self):
@@ -155,6 +239,10 @@ class MuZeroAtariNetwork(nn.Module):
         return self.discrete_value_size
 
     @torch.jit.export
+    def get_num_decoder_output_channels(self):
+        return self.num_decoder_output_channels
+
+    @torch.jit.export
     def initial_inference(self, state):
         # representation + prediction
         hidden_state = self.representation_network(state)
@@ -162,11 +250,16 @@ class MuZeroAtariNetwork(nn.Module):
         policy_logit, value_logit = self.prediction_network(hidden_state)
         policy = torch.softmax(policy_logit, dim=1)
         value = torch.softmax(value_logit, dim=1)
-        return {"policy_logit": policy_logit,
-                "policy": policy,
-                "value_logit": value_logit,
-                "value": value,
-                "hidden_state": hidden_state}
+        inference_output = {"policy_logit": policy_logit,
+                            "policy": policy,
+                            "value_logit": value_logit,
+                            "value": value,
+                            "hidden_state": hidden_state}
+        # decoder
+        decoder_output = self.forward_decoder(hidden_state) if self.decoder_output_at_inference else None
+        if decoder_output is not None:
+            inference_output["decoder_output"] = decoder_output
+        return inference_output
 
     @torch.jit.export
     def recurrent_inference(self, hidden_state, action_plane):
@@ -177,13 +270,18 @@ class MuZeroAtariNetwork(nn.Module):
         policy = torch.softmax(policy_logit, dim=1)
         value = torch.softmax(value_logit, dim=1)
         reward = torch.softmax(reward_logit, dim=1)
-        return {"policy_logit": policy_logit,
-                "policy": policy,
-                "value": value,
-                "value_logit": value_logit,
-                "reward": reward,
-                "reward_logit": reward_logit,
-                "hidden_state": next_hidden_state}
+        inference_output = {"policy_logit": policy_logit,
+                            "policy": policy,
+                            "value": value,
+                            "value_logit": value_logit,
+                            "reward": reward,
+                            "reward_logit": reward_logit,
+                            "hidden_state": next_hidden_state}
+        # decoder
+        decoder_output = self.forward_decoder(next_hidden_state) if self.decoder_output_at_inference else None
+        if decoder_output is not None:
+            inference_output["decoder_output"] = decoder_output
+        return inference_output
 
     def scale_hidden_state(self, hidden_state):
         # scale hidden state to range [0, 1] for each feature plane
@@ -202,3 +300,19 @@ class MuZeroAtariNetwork(nn.Module):
             return self.initial_inference(state)
         else:
             return self.recurrent_inference(state, action_plane)
+
+    def forward_consistency_proj(self, state, with_grad_):
+        if self.consistency_network is None:
+            return None
+        # only the branch of proj + pred can share the gradients
+        if with_grad_:
+            return self.consistency_network(state, with_grad_)
+        else:
+            hidden_state_ = self.representation_network(state)
+            hidden_state_ = self.scale_hidden_state(hidden_state_)
+            return self.consistency_network(hidden_state_, with_grad_)
+
+    def forward_decoder(self, hidden_state):
+        if self.decoder_network is None:
+            return None
+        return self.decoder_network(hidden_state)

@@ -31,6 +31,8 @@ int actor_gumbel_sample_size = 16;
 float actor_gumbel_sigma_visit_c = 50;
 float actor_gumbel_sigma_scale_c = 1;
 float actor_resign_threshold = -0.9f;
+bool actor_dump_mcts_tree = false;
+bool actor_dump_board_in_mcts_node = false;
 
 // zero parameters
 int zero_num_threads = 4;
@@ -60,6 +62,8 @@ float learner_learning_rate = 0.02;
 float learner_momentum = 0.9;
 float learner_weight_decay = 0.0001;
 float learner_value_loss_scale = 1.0f;
+bool learner_use_state_consistency = false;
+bool learner_use_decoder = true;
 int learner_num_thread = 8;
 
 // network parameters
@@ -67,6 +71,10 @@ std::string nn_file_name = "";
 int nn_num_blocks = 1;
 int nn_num_hidden_channels = 256;
 int nn_num_value_hidden_channels = 256;
+int nn_state_consistency_proj_hid = 256;
+int nn_state_consistency_proj_out = 256;
+int nn_state_consistency_pred_hid = 64;
+int nn_state_consistency_pred_out = 256;
 std::string nn_type_name = "alphazero";
 
 // environment parameters
@@ -80,6 +88,14 @@ std::string env_gomoku_rule = "standard";
 bool env_gomoku_exactly_five_stones = true;
 bool env_hex_use_swap_rule = true;
 int env_rubiks_scramble_rotate = 5;
+
+// decoder parameters
+std::string decoder_sgf_file_path = ".";
+std::string decoder_out_file_path = ".";
+int decoder_eval_sample_num = 100;
+bool decoder_output_at_inference = false;
+float decoder_loss_scale = 1;
+float decoder_clip_grad_value = 0;
 
 void setConfiguration(ConfigureLoader& cl)
 {
@@ -110,6 +126,8 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("actor_gumbel_sigma_visit_c", actor_gumbel_sigma_visit_c, "hyperparameter for the monotonically increasing transformation sigma in Gumbel Zero", "Actor"); // ref: GZ, Sec. 3.4
     cl.addParameter("actor_gumbel_sigma_scale_c", actor_gumbel_sigma_scale_c, "hyperparameter for the monotonically increasing transformation sigma in Gumbel Zero", "Actor"); // ref: GZ, Sec. 3.4
     cl.addParameter("actor_resign_threshold", actor_resign_threshold, "the threshold determining when to resign in the actor", "Actor");                                       // ref: AG, Sec. Methods
+    cl.addParameter("actor_dump_mcts_tree", actor_dump_mcts_tree, "true for dumping the MCTS tree", "Actor");
+    cl.addParameter("actor_dump_board_in_mcts_node", actor_dump_board_in_mcts_node, "true for dumping the board state in the MCTS node", "Actor");
 
     // zero parameters
     cl.addParameter("zero_num_threads", zero_num_threads, "the number of threads that the zero server uses for zero training", "Zero");
@@ -139,6 +157,8 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("learner_momentum", learner_momentum, "hyperparameter for momentum", "Learner");
     cl.addParameter("learner_weight_decay", learner_weight_decay, "hyperparameter for weight decay", "Learner");
     cl.addParameter("learner_value_loss_scale", learner_value_loss_scale, "hyperparameter for scaling of the value loss", "Learner");
+    cl.addParameter("learner_use_state_consistency", learner_use_state_consistency, "true for enabling state consistency", "Learner");
+    cl.addParameter("learner_use_decoder", learner_use_decoder, "true for enabling decoder for MuZero training", "Learner");
     cl.addParameter("learner_num_thread", learner_num_thread, "the number of threads for training", "Learner");
 
     // network parameters
@@ -146,7 +166,19 @@ void setConfiguration(ConfigureLoader& cl)
     cl.addParameter("nn_num_blocks", nn_num_blocks, "hyperparameter for the model; the number of the residual blocks", "Network");                                                  // ref: AGZ
     cl.addParameter("nn_num_hidden_channels", nn_num_hidden_channels, "hyperparameter for the model; the size of the hidden channels in residual blocks", "Network");               // ref: AGZ
     cl.addParameter("nn_num_value_hidden_channels", nn_num_value_hidden_channels, "hyperparameter for the model; the size of the hidden channels in the value network", "Network"); // ref: AGZ
+    cl.addParameter("nn_state_consistency_proj_hid", nn_state_consistency_proj_hid, "hyperparameter for state consistency", "Network");
+    cl.addParameter("nn_state_consistency_proj_out", nn_state_consistency_proj_out, "hyperparameter for state consistency", "Network");
+    cl.addParameter("nn_state_consistency_pred_hid", nn_state_consistency_pred_hid, "hyperparameter for state consistency", "Network");
+    cl.addParameter("nn_state_consistency_pred_out", nn_state_consistency_pred_out, "hyperparameter for state consistency", "Network");
     cl.addParameter("nn_type_name", nn_type_name, "the type of training algorithm and network: alphazero/muzero", "Network");
+
+    // decoder parameters
+    cl.addParameter("decoder_sgf_file_path", decoder_sgf_file_path, "for decoder analysis", "Decoder");
+    cl.addParameter("decoder_out_file_path", decoder_out_file_path, "for decoder analysis", "Decoder");
+    cl.addParameter("decoder_eval_sample_num", decoder_eval_sample_num, "for decoder analysis", "Decoder");
+    cl.addParameter("decoder_output_at_inference", decoder_output_at_inference, "whether to forward decoder network at initial and recurrent inferences", "Decoder");
+    cl.addParameter("decoder_loss_scale", decoder_loss_scale, "hyperparameter for scaling of the decoder loss", "Decoder");
+    cl.addParameter("decoder_clip_grad_value", decoder_clip_grad_value, "the value to clip the gradient using clip_grad_value_; 0 to disable this clipping", "Decoder");
 
     // environment parameters
     cl.addParameter("env_board_size", env_board_size, "the size of board", "Environment");

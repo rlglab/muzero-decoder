@@ -1,6 +1,7 @@
 #include "mode_handler.h"
 #include "actor_group.h"
 #include "console.h"
+#include "decoder_dump.h"
 #include "git_info.h"
 #include "obs_recover.h"
 #include "obs_remover.h"
@@ -23,6 +24,10 @@ ModeHandler::ModeHandler()
     RegisterFunction("env_test", this, &ModeHandler::runEnvTest);
     RegisterFunction("remove_obs", this, &ModeHandler::runRemoveObs);
     RegisterFunction("recover_obs", this, &ModeHandler::runRecoverObs);
+    RegisterFunction("decoder_dump", this, &ModeHandler::runDecoderDumpTool);
+    RegisterFunction("decoder_analysis", this, &ModeHandler::runDecoderAnalysis);
+    RegisterFunction("plotter", this, &ModeHandler::runPlotter);
+    RegisterFunction("tree_dump_analysis", this, &ModeHandler::runTreeDumpAnalysis);
 }
 
 void ModeHandler::run(int argc, char* argv[])
@@ -200,6 +205,26 @@ void ModeHandler::runRecoverObs()
 #else
     std::cout << "Currently, only support recover observation for atari games" << std::endl;
 #endif
+}
+
+void ModeHandler::runDecoderDumpTool()
+{
+    minizero::utils::runDecoderDumpTool();
+}
+
+void ModeHandler::runDecoderAnalysis()
+{
+    minizero::utils::runDecoderAnalysis();
+}
+
+void ModeHandler::runPlotter()
+{
+    minizero::utils::runPlotter();
+}
+
+void ModeHandler::runTreeDumpAnalysis()
+{
+    minizero::utils::runTreeDumpAnalysis();
 }
 
 } // namespace minizero::console

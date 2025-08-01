@@ -49,6 +49,10 @@ protected:
     virtual void runEnvTest();
     virtual void runRemoveObs();
     virtual void runRecoverObs();
+    virtual void runDecoderDumpTool();
+    virtual void runDecoderAnalysis();
+    virtual void runPlotter();
+    virtual void runTreeDumpAnalysis();
 
     std::map<std::string, std::shared_ptr<BaseFunction>> function_map_;
 };

@@ -18,14 +18,16 @@ public:
     std::vector<float> policy_;
     std::vector<float> policy_logits_;
     std::vector<float> hidden_state_;
+    std::vector<float> decoder_output_;
 
-    MuZeroNetworkOutput(int policy_size, int hidden_state_size)
+    MuZeroNetworkOutput(int policy_size, int hidden_state_size, int decoder_size)
     {
         value_ = 0.0f;
         reward_ = 0.0f;
         policy_.resize(policy_size, 0.0f);
         policy_logits_.resize(policy_size, 0.0f);
         hidden_state_.resize(hidden_state_size, 0.0f);
+        decoder_output_.resize(decoder_size, 0.0f);
     }
 };
 
@@ -131,17 +133,21 @@ protected:
         auto value_output = forward_result.at("value").toTensor().to(at::kCPU);
         auto reward_output = (forward_result.contains("reward") ? forward_result.at("reward").toTensor().to(at::kCPU) : torch::zeros(0));
         auto hidden_state_output = forward_result.at("hidden_state").toTensor().to(at::kCPU);
+        auto decoder_output = (forward_result.contains("decoder_output") ? forward_result.at("decoder_output").toTensor().to(at::kCPU) : torch::zeros(0));
+
         assert(policy_output.numel() == batch_size * getActionSize());
         assert(policy_logits_output.numel() == batch_size * getActionSize());
         assert((getNetworkTypeName() != "muzero_atari" && value_output.numel() == batch_size) || (getNetworkTypeName() == "muzero_atari" && value_output.numel() == batch_size * getDiscreteValueSize()));
         assert(!forward_result.contains("reward") || (forward_result.contains("reward") && reward_output.numel() == batch_size * getDiscreteValueSize()));
         assert(hidden_state_output.numel() == batch_size * getNumHiddenChannels() * getHiddenChannelHeight() * getHiddenChannelWidth());
+        assert(!forward_result.contains("decoder_output") || (decoder_output.numel() == batch_size * getNumDecoderOutputChannels() * getInputChannelHeight() * getInputChannelWidth()));
 
         const int policy_size = getActionSize();
+        const int decoder_size = getNumDecoderOutputChannels() * getInputChannelHeight() * getInputChannelWidth();
         const int hidden_state_size = getNumHiddenChannels() * getHiddenChannelHeight() * getHiddenChannelWidth();
         std::vector<std::shared_ptr<NetworkOutput>> network_outputs;
         for (int i = 0; i < batch_size; ++i) {
-            network_outputs.emplace_back(std::make_shared<MuZeroNetworkOutput>(policy_size, hidden_state_size));
+            network_outputs.emplace_back(std::make_shared<MuZeroNetworkOutput>(policy_size, hidden_state_size, decoder_size));
             auto muzero_network_output = std::static_pointer_cast<MuZeroNetworkOutput>(network_outputs.back());
 
             std::copy(policy_output.data_ptr<float>() + i * policy_size,
@@ -153,6 +159,13 @@ protected:
             std::copy(hidden_state_output.data_ptr<float>() + i * hidden_state_size,
                       hidden_state_output.data_ptr<float>() + (i + 1) * hidden_state_size,
                       muzero_network_output->hidden_state_.begin());
+            if (forward_result.contains("decoder_output")) {
+                std::copy(decoder_output.data_ptr<float>() + i * decoder_size,
+                          decoder_output.data_ptr<float>() + (i + 1) * decoder_size,
+                          muzero_network_output->decoder_output_.begin());
+            } else {
+                muzero_network_output->decoder_output_.clear();
+            }
 
             if (getNetworkTypeName() == "muzero_atari") {
                 int start_value = -getDiscreteValueSize() / 2;

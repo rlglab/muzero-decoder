@@ -15,6 +15,9 @@ def create_network(game_name="tietactoe",
                    action_size=9,
                    num_value_hidden_channels=256,
                    discrete_value_size=601,
+                   state_consistency_params=(256, 256, 64, 256),
+                   num_decoder_output_channels=4,
+                   decoder_output_at_inference=False,
                    network_type_name="alphazero"):
 
     network = None
@@ -43,7 +46,10 @@ def create_network(game_name="tietactoe",
                                          num_blocks,
                                          action_size,
                                          num_value_hidden_channels,
-                                         discrete_value_size)
+                                         discrete_value_size,
+                                         state_consistency_params,
+                                         num_decoder_output_channels,
+                                         decoder_output_at_inference)
         else:
             network = MuZeroNetwork(game_name,
                                     num_input_channels,
@@ -56,7 +62,10 @@ def create_network(game_name="tietactoe",
                                     num_blocks,
                                     action_size,
                                     num_value_hidden_channels,
-                                    discrete_value_size)
+                                    discrete_value_size,
+                                    state_consistency_params,
+                                    num_decoder_output_channels,
+                                    decoder_output_at_inference)
     else:
         assert False
 

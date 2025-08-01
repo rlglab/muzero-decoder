@@ -70,6 +70,7 @@ public:
     inline int getHiddenChannelWidth() const override { return kAtariHiddenChannelWidth; }
     inline int getPolicySize() const override { return kAtariActionSize; }
     inline int getDiscreteValueSize() const override { return kAtariDiscreteValueSize; }
+    inline int getNumDecoderOutputChannels() const override { return 3; }
     std::string toString() const override;
     inline std::string name() const override { return kAtariName + "_" + minizero::config::env_atari_name; }
     inline int getNumPlayer() const override { return kAtariNumPlayer; }

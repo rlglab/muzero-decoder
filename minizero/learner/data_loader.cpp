@@ -164,8 +164,7 @@ void DataLoaderThread::setMuZeroTrainingData(int batch_index)
     const EnvironmentLoader& env_loader = getSharedData()->replay_buffer_.env_loaders_[env_id];
     Rotation rotation = static_cast<Rotation>(Random::randInt() % static_cast<int>(Rotation::kRotateSize));
     float loss_scale = getSharedData()->replay_buffer_.getLossScale(p);
-    std::vector<float> features = env_loader.getFeatures(pos, rotation);
-    std::vector<float> action_features, policy, value, reward, tmp;
+    std::vector<float> action_features, policy, value, reward, tmp, features;
     for (int step = 0; step <= config::learner_muzero_unrolling_step; ++step) {
         // action features
         if (step < config::learner_muzero_unrolling_step) {
@@ -176,6 +175,10 @@ void DataLoaderThread::setMuZeroTrainingData(int batch_index)
         // policy
         tmp = env_loader.getPolicy(pos + step, rotation);
         policy.insert(policy.end(), tmp.begin(), tmp.end());
+
+        // features
+        tmp = env_loader.getFeatures(pos + step, rotation);
+        features.insert(features.end(), tmp.begin(), tmp.end());
 
         // value
         tmp = env_loader.getValue(pos + step);

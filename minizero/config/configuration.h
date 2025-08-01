@@ -33,6 +33,8 @@ extern int actor_gumbel_sample_size;
 extern float actor_gumbel_sigma_visit_c;
 extern float actor_gumbel_sigma_scale_c;
 extern float actor_resign_threshold;
+extern bool actor_dump_mcts_tree;
+extern bool actor_dump_board_in_mcts_node;
 
 // zero parameters
 extern int zero_num_threads;
@@ -62,6 +64,8 @@ extern float learner_learning_rate;
 extern float learner_momentum;
 extern float learner_weight_decay;
 extern float learner_value_loss_scale;
+extern bool learner_use_state_consistency;
+extern bool learner_use_decoder;
 extern int learner_num_thread;
 
 // network parameters
@@ -69,12 +73,22 @@ extern std::string nn_file_name;
 extern int nn_num_blocks;
 extern int nn_num_hidden_channels;
 extern int nn_num_value_hidden_channels;
+extern int nn_state_consistency_proj_hid;
+extern int nn_state_consistency_proj_out;
+extern int nn_state_consistency_pred_hid;
+extern int nn_state_consistency_pred_out;
 extern std::string nn_type_name;
+
+// decoder parameters
+extern std::string decoder_sgf_file_path;
+extern std::string decoder_out_file_path;
+extern int decoder_eval_sample_num;
+extern bool decoder_output_at_inference;
+extern float decoder_loss_scale;
+extern float decoder_clip_grad_value;
 
 // environment parameters
 extern int env_board_size;
-
-// environment parameters for specific game
 extern std::string env_atari_rom_dir;
 extern std::string env_atari_name;
 extern float env_go_komi;

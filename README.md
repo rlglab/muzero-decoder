@@ -1,231 +1,192 @@
-# MiniZero
+## Demystifying MuZero Planning: Interpreting the Learned Model
 
-MiniZero is a zero-knowledge learning framework that supports AlphaZero, MuZero, Gumbel AlphaZero, and Gumbel MuZero algorithms.
+This is the official repository of the IEEE TAI paper "[Demystifying MuZero Planning: Interpreting the Learned Model](https://rlg.iis.sinica.edu.tw/papers/demystifying-muzero-planning)".
 
-This is the official repository of the IEEE ToG paper [MiniZero: Comparative Analysis of AlphaZero and MuZero on Go, Othello, and Atari Games](https://rlg.iis.sinica.edu.tw/papers/minizero).
-
-If you use MiniZero for research, please consider citing our paper as follows:
+If you use this work for research, please consider citing our paper:
 ```
-@article{wu2024minizero,
-  title={MiniZero: Comparative Analysis of AlphaZero and MuZero on Go, Othello, and Atari Games},
-  author={Wu, Ti-Rong and Guei, Hung and Peng, Pei-Chiun and Huang, Po-Wei and Wei, Ting Han and Shih, Chung-Chin and Tsai, Yun-Jui},
-  journal={IEEE Transactions on Games},
-  year={2024},
+@article{guei2025demystifying,
+  title={Demystifying MuZero Planning: Interpreting the Learned Model}, 
+  author={Guei, Hung and Ju, Yan-Ru and Chen, Wei-Yu and Wu, Ti-Rong},
+  journal={IEEE Transactions on Artificial Intelligence}, 
+  year={2025},
+  doi={10.1109/TAI.2025.3591082},
   publisher={IEEE}
 }
 ```
 
-Outline
-* [Overview](#Overview)
-    * [Architecture](#Architecture)
-    * [Results](#Results)
-    * [Prerequisites](#Prerequisites)
-* [Quick Start](#Quick-Start)
-    * [Training](#Training)
-    * [Evaluation](#Evaluation)
-    * [Console](#Console)
-* [Development](#Development)
-* [References](#References)
+This repository extends the [MiniZero](https://github.com/rlglab/minizero) framework to integrate MuZero with a *decoder network*, allowing reconstruction of hidden states into human-interpretable observations.
+The decoder network performs well in our setup, as shown by the images below that compare the original and the reconstructed observations in five games.
 
-## Overview
+|        | 9×9 Go | Gomoku | Breakout | Ms. Pacman | Pong |
+| :----: | :----: | :----: | :------: | :--------: | :--: |
+| original <br> observations | <img src="docs/imgs/decoder/go-observation_29.png" height="110" /> | <img src="docs/imgs/decoder/gomoku-observation_15.png" height="110" /> | <img src="docs/imgs/decoder/breakout-observation_851.png" height="110" /> | <img src="docs/imgs/decoder/pacman-observation_174.png" height="110" /> | <img src="docs/imgs/decoder/pong-observation_684.png" height="110" /> |
+| reconstructed <br> observations | <img src="docs/imgs/decoder/go-representation_29.png" height="110" /> | <img src="docs/imgs/decoder/gomoku-representation_15.png" height="110" /> | <img src="docs/imgs/decoder/breakout-representation_851.png" height="110" /> | <img src="docs/imgs/decoder/pacman-representation_174.png" height="110" /> | <img src="docs/imgs/decoder/pong-representation_684.png" height="110" /> |
 
-MiniZero utilizes zero-knowledge learning algorithms to train game-specific AI models.
+Visualizing the hidden states within the MuZero search tree offers a clearer understanding of how MuZero learns and plans.
+For example, here is the Gomoku search tree for Black winning, revealing intriguing insights that MuZero is unfamiliar with invalid states (dashed ellipses) but still manages to maintain accurate values for them.
 
-It includes a variety of zero-knowledge learning algorithms:
-* AlphaZero
-* MuZero
-* Gumbel AlphaZero
-* Gumbel MuZero
+<img src="docs/imgs/decoder/search-tree-gomoku.svg" />
 
-It supports a variety of game environments:
-* Go
-* NoGo
-* Killall-Go
-* Gomoku / Outer-Open Gomoku
-* Othello
-* Hex
-* TicTacToe
-* Atari (57 games)
+For more interesting findings, please refer to [our paper](https://doi.org/10.1109/TAI.2025.3591082).
 
-We are planning to add new algorithms, features, and more games in the future.
+The following sections will demonstrate how to train MuZero models with the decoder and use the models to examine unrolled hidden states and the MuZero search tree.
 
-### Architecture
+## Training MuZero with Decoder
 
-The MiniZero architecture comprises four components: a *server*, *self-play workers*, an *optimization worker*, and *data storage*.
+First, clone this repository and enter the container using `scripts/start-container.sh`.
 
-![MiniZero Architecture](docs/imgs/minizero-architecture.svg)
+> [!NOTE]
+> The code requires an Ubuntu system with [`docker`](https://www.docker.com/) or [`podman`](https://podman.io/) installed, it is recommended to have 24GB of GPU memory.
+> The trained MuZero models used in the paper are available [here](https://rlg.iis.sinica.edu.tw/papers/demystifying-muzero-planning).
 
+Standard script and configurations are provided to replicate the MuZero models with the decoder used in the paper.
+For example, run
+```bash
+# for Go, use the config "cfg/go.cfg" to train the model for 300 iterations and store in folder "go_9x9_gmz"
+scripts/train.sh go cfg/go.cfg go_9x9_gmz 300
+```
 <details>
-<summary>Server</summary>
+<summary>Show the commands for all supported games.</summary>
 
-The server is the core component in MiniZero, controlling the training process and managing both the self-play and optimization workers.
-
-In each iteration, the server first instructs all self-play workers to generate self-play games simultaneously using the latest network and collects game records from self-play workers. 
-Once the server accumulates the necessary self-play games, it then stops the self-play workers and instructs the optimization worker to load the latest game records and start network updates.
-After the network has been updated, the server starts the next iteration until the training reaches a predetermined maximum iteration.
-
+* 9x9 Go: `scripts/train.sh go cfg/go.cfg go_9x9_gmz 300`
+* Gomoku: `scripts/train.sh gomoku cfg/gomoku.cfg gomoku_oo_15x15_gmz 300`
+* Breakout: `scripts/train.sh atari cfg/atari_breakout.cfg atari_breakout_gmz 300`
+* Ms. Pacman: `scripts/train.sh atari cfg/atari_ms_pacman.cfg atari_ms_pacman_gmz 300`
+* Pong: `scripts/train.sh atari cfg/atari_pong.cfg atari_pong_gmz 300`
+  
 </details>
 
-<details>
-<summary>Self-play worker</summary>
+> [!TIP]
+> For more details and training hyperparameters, check out the [script](scripts/train.sh) and the [MiniZero docs](https://github.com/rlglab/minizero/blob/main/docs/Training.md).
 
-The self-play worker interacts with the environment to produce self-play games.
+Once the training is complete, taking Go as an example, a training folder named `go_9x9_gmz` will contain MuZero network models and training log files as follows.
+* `model/`: a subfolder contains trained models of each iteration, e.g., `model/weight_iter_60000.pt`
+* `sgf/`: a subfolder contains self-play records of each iteration, e.g., `sgf/300.sgf`
+* `decoder/`: a subfolder contains the reconstructed observations during training
+* `analysis/`: a subfolder contains the statistics during training
+* `go_9x9_gmz.cfg`: the configuration file used for training
+* `Training.log`, `Worker.log`, and `op.log`: the log files during training
 
-There may be multiple self-play workers. Each self-play worker maintains multiple MCTS instances to play multiple games simultaneously with batch GPU inferencing to improve efficiency.
-Specifically, the self-play worker runs the selection for each MCTS to collect a batch of leaf nodes and then evaluates them through batch GPU inferencing.
-Finished self-play games are sent to the server and forwarded to the data storage by the server.
-    
-</details>
+<!-- ```
+go_9x9_gmz
+├── model                            # the MuZero models of each iteration
+│   ├── weight_iter_200.pt           #   1st iteration
+│   ├── weight_iter_400.pt           #   2nd iteration
+│   ├── ...
+│   └── weight_iter_60000.pt         #   300th iteration
+├── sgf                              # the self-play records of each iteration
+│   ├── 1.sgf                        #   1st iteration
+│   ├── 2.sgf                        #   2nd iteration
+│   ├── ...
+│   └── 300.sgf                      #   300th iteration
+├── decoder                          # the reconstructed observations during training
+│   ├── visualization_1_200.png      #   1st iteration
+│   ├── visualization_2_400.png      #   2nd iteration
+│   ├── ...
+│   └── visualization_300_60000.png  #   300th iteration
+├── analysis                         # the statistics during training
+├── go_9x9_gmz.cfg                   # the used configuration file
+├── op.log                           # the log of network optimization
+├── Training.log                     # the log of the main training process
+└── Worker.log                       # the log of the worker components
+``` -->
 
-<details>
-<summary>Optimization worker</summary>
+## Analyzing MuZero Unrolling
 
-The optimization worker updates the network using collected self-play games.
+This analysis examines how a specific MuZero model performs within a given game record.
+Across all time steps of the game, it produces the observations and reconstructed observations of unrolled hidden states.
 
-Specifically, it loads self-play games from data storage and stores them into the replay buffer, and then updates the network over steps using data sampled from the replay buffer.
-Generally, the number of optimized steps is proportional to the number of collected self-play games to prevent overfitting.
-Finally, the updated networks are stored into the data storage.
-
-</details>
-
-<details>
-<summary>Data storage</summary>
-
-The data storage stores network files and self-play games.
-
-Specifically, it uses the Network File System (NFS) for sharing data across different machines.
-This is an implementation choice; a simpler file system can suffice if distributed computing is not employed.
-
-</details>
-
-### Results
-
-The performance of each zero-knowledge learning algorithm on board games and Atari games are shown as follows, where α<sub>0</sub>, μ<sub>0</sub>, g-α<sub>0</sub>, and g-μ<sub>0</sub> represent AlphaZero, MuZero, Gumbel AlphaZero, and Gumbel MuZero, and $n$ represents simulation count.
-More details and publicly released AI models are available [here](https://rlg.iis.sinica.edu.tw/papers/minizero).
-
-Results on board games:
-
-<img src="docs/imgs/minizero_go_9x9.svg" alt="Go 9x9" width="50%"><img src="docs/imgs/minizero_othello_8x8.svg" alt="Othello 8x8" width="50%">
-
-Results on Atari games:
-
-<img src="docs/imgs/minizero_atari.svg" alt="Atari" width="100%">
-
-### Prerequisites
-
-MiniZero requires a Linux platform with at least one NVIDIA GPU to operate.
-To facilitate the use of MiniZero, a [container image](https://hub.docker.com/r/kds285/minizero) is pre-built to include all required packages. 
-Thus, a container tool such as `docker` or `podman` is also required.
-
-<details>
-<summary>Show platform recommendations</summary>
-
-* Modern CPU with at least 64G RAM
-* NVIDIA GPU of GTX 1080 (VRAM 8G) or above
-* Linux operating system, e.g., Ubuntu 22.04 LTS
-
-</details>
-
-<details>
-<summary>Show tested platforms</summary>
-
-|CPU|RAM|GPU|OS|
-|---|---|---|--|
-|Xeon Silver 4216 x2|256G|RTX A5000 x4|Ubuntu 20.04.6 LTS|
-|Xeon Silver 4216 x2|128G|RTX 3080 Ti x4|Ubuntu 20.04.5 LTS|
-|Xeon Silver 4216 x2|256G|RTX 3090 x4|Ubuntu 20.04.5 LTS|
-|Xeon Silver 4210 x2|128G|RTX 3080 x4|Ubuntu 22.04 LTS|
-|Xeon E5-2678 v3 x2|192G|GTX 1080 Ti x4|Ubuntu 20.04.5 LTS|
-|Xeon E5-2698 v4 x2|128G|GTX 1080 Ti x1|Arch Linux LTS (5.15.90)|
-|Core i9-7980XE|128G|GTX 1080 Ti x1|Arch Linux (6.5.6)|
-
-</details>
-
-## Quick Start
-
-This section walks you through training AI models using zero-knowledge learning algorithms, evaluating trained AI models, and launching the console to interact with the AI.
-
-First, clone this repository.
-
+Take the Go model `go_9x9_gmz` as an example, to analyze the model on the latest iteration, run
 ```bash
-git clone git@github.com:rlglab/minizero.git
-cd minizero # enter the cloned repository
+# for Go, use the config "cfg/go.cfg" and the model "go_9x9_gmz/model/weight_iter_60000.pt", read the first record in "go_9x9_gmz/sgf/300.sgf" and produce the results in folder "go_9x9_gmz/unroll_analysis"
+scripts/analyze-unroll.sh go cfg/go.cfg go_9x9_gmz/model/weight_iter_60000.pt go_9x9_gmz/sgf/300.sgf go_9x9_gmz/unroll_analysis
 ```
 
-Then, start the runtime environment using the container. 
+The results will be stored in `go_9x9_gmz/unroll_analysis`, which contains four kinds of observation images:
+> [!NOTE]
+> Suppose the game has 105 moves, with observations $o_0, o_1, ..., o_{105}$ and actions $a_0, a_1, ..., a_{104}$.\
+> We denote $h$, $g$, and $d$ as the representation, dynamics, and the decoder network, respectively.
+* `observation_i.png`: observation $o_i$
+* `representation_i.png`: reconstructed observation $d(h(o_i))$
+* `dynamics_i.png`: reconstructed observation that unrolled from the initial, e.g.,
+    - `dynamics_1.png`: reconstructed observation $d(g(h(o_0),a_0))$
+    - `dynamics_2.png`: reconstructed observation $d(g(g(h(o_0),a_0),a_1))$
+    - `dynamics_105.png`: reconstructed observation $d(g(g(...g(h(o_0),a_0)...,a_{103}),a_{104}))$
+* `dynamics_k_i.png`: reconstructed observation that unrolled from $k = 5$ steps ago, e.g.,
+    - `dynamics_k_5.png`: reconstructed observation $d(g(...g(h(o_0),a_0)...,a_4))$
+    - `dynamics_k_6.png`: reconstructed observation $d(g(...g(h(o_1),a_1)...,a_5))$
+    - `dynamics_k_105.png`: reconstructed observation $d(g(...g(h(o_{100}),a_{100})...,a_{104}))$
+
+<!-- ```
+go_9x9_gmz/unroll_analysis
+├── observation_0.png           # observation: o_0
+├── observation                 # observations: o_1 to o_105
+│   ├── observation_1.png       #   o_1
+│   ├── observation_2.png       #   o_2
+│   ├── ...
+│   └── observation_105.png     #   o_105 (terminal step)
+├── representation_0.png        # reconstructed observation: d(h(o_0))
+├── representation              # reconstructed observations (without unrolling):
+│   ├── representation_1.png    #   from o_1: d(h(o_1))
+│   ├── representation_2.png    #   from o_2: d(h(o_2))
+│   ├── ...
+│   └── representation_105.png  #   from o_105: d(h(o_105))
+├── dynamics                    # reconstructed observations (unrolled from the initial):
+│   ├── dynamics_1.png          #   unrolled 1 step: d(g(h(o_0),a_0))
+│   ├── dynamics_2.png          #   unrolled 2 step: d(g(g(h(o_0),a_0),a_1))
+│   ├── ...
+│   └── dynamics_105.png        #   unrolled 105 step: d(g(g(...g(h(o_0),a_0)...,a_103),a_104))
+└── dynamics_k                  # reconstructed observations (unrolled from k=5 steps ago):
+    ├── dynamics_k_5.png        #   unrolled from h(o_0): d(g(...g(h(o_0),a_0)...,a_4))
+    ├── dynamics_k_6.png        #   unrolled from h(o_1): d(g(...g(h(o_1),a_1)...,a_5))
+    ├── ...
+    └── dynamics_k_105.png      #   unrolled from h(o_100): d(g(...g(h(o_100),a_100)...,a_104))
+
+# Note: o_t is the observation at time step t;
+#       h, g, and d are the representation, dynamics, and the decoder network, respectively
+``` -->
+
+## Dumping MuZero Search Tree
+
+The search tree provides information about the decision-making process for MuZero.
+To play a game with the learned model, and dump all the search trees for each move, run
 
 ```bash
-scripts/start-container.sh # must have either podman or docker installed
+# for Go, use the config "cfg/go.cfg" and the model "go_9x9_gmz/model/weight_iter_60000.pt", run a self-play game with tree dump and store the dump files in folder "go_9x9_gmz/mcts_dump"
+scripts/dump-mcts.sh go cfg/go.cfg go_9x9_gmz/model/weight_iter_60000.pt go_9x9_gmz/mcts_dump
 ```
 
-Once a container starts successfully, its working folder should be located at `/workspace`.
-You must execute all of the following commands inside the container.
+The dump files are stored in `go_9x9_gmz/mcts_dump`, organized as follows.
+* `selfplay.sgf` and `selfplay.log`: the self-play game record and log
+* `tree_dump.txt`: the tree dump of each move
+* `tree_dump/`: a subfolder contains images of the MCTS tree of each move, e.g.,
+    - `tree_game0_move0.png`: the tree image of move0
+    - `tree_game0_move1.png`: the tree image of move1
+* `move_dump.txt`: the MCTS selection steps of each move
+* `move_dump/`: a subfolder contains images of all MCTS selection steps (selected leaf nodes) of each move, e.g.,
+    - `game0_move0_*_env.png`: the observations of selected leaf nodes in the tree of move0
+    - `game0_move0_*_decoder.png`: the reconstructed observations of selected leaf nodes in the tree of move0
+    - `game0_move1_*_env.png`: the observations of selected leaf nodes in the tree of move1
+    - `game0_move1_*_decoder.png`: the reconstructed observations of selected leaf nodes in the tree of move1
 
-### Training
+<!-- ```
+go_9x9_gmz/mcts_dump
+├── selfplay.sgf                     # the self-play game record
+├── selfplay.log                     # the self-play log
+├── tree_dump.txt                    # the raw tree dump of each move
+├── tree_dump                        # the images of the MCTS tree of each move
+│   ├── tree_game0_move0.png         #   the tree of move0
+│   ├── tree_game0_move1.png         #   the tree of move1
+│   ├── ...
+│   └── tree_game0_move102.png       #   the tree of move102
+├── move_dump.txt                    # the raw MCTS simulation steps of each move
+└── move_dump                        # the images of the MCTS simulation steps of each move
+    ├── game0_move0_*_env.png        #   the observations of all simulation steps of move0
+    ├── game0_move0_*_decoder.png    #   the reconstructed obs. of all simulation steps of move0
+    ├── game0_move1_*_env.png        #   the observations of all simulation steps of move1
+    ├── game0_move1_*_decoder.png    #   the reconstructed obs. of all simulation steps of move1
+    ├── ...
+    ├── game0_move102_*_env.png      #   the observations of all simulation steps of move102
+    └── game0_move102_*_decoder.png  #   the reconstructed obs. of all simulation steps of move102
+``` -->
 
-To train 9x9 Go:
-```bash
-# AlphaZero with 200 simulations
-tools/quick-run.sh train go az 300 -n go_9x9_az_n200 -conf_str env_board_size=9:actor_num_simulation=200
-
-# Gumbel AlphaZero with 16 simulations
-tools/quick-run.sh train go gaz 300 -n go_9x9_gaz_n16 -conf_str env_board_size=9:actor_num_simulation=16
-```
-
-To train Ms. Pac-Man:
-```bash
-# MuZero with 50 simulations
-tools/quick-run.sh train atari mz 300 -n ms_pacman_mz_n50 -conf_str env_atari_name=ms_pacman:actor_num_simulation=50
-
-# Gumbel MuZero with 18 simulations
-tools/quick-run.sh train atari gmz 300 -n ms_pacman_gmz_n18 -conf_str env_atari_name=ms_pacman:actor_num_simulation=18
-```
-
-For more training details, please refer to [this instructions](docs/Training.md).
-
-### Evaluation
-
-To evaluate the strength growth during training:
-```bash
-# the strength growth for "go_9x9_az_n200"
-tools/quick-run.sh self-eval go go_9x9_az_n200 -conf_str env_board_size=9:actor_num_simulation=800:actor_select_action_by_count=true:actor_select_action_by_softmax_count=false:actor_use_dirichlet_noise=false:actor_use_gumbel_noise=false
-```
-
-To compare the strengths between two trained AI models:
-```bash
-# the relative strengths between "go_9x9_az_n200" and "go_9x9_gaz_n16"
-tools/quick-run.sh fight-eval go go_9x9_az_n200 go_9x9_gaz_n16 -conf_str env_board_size=9:actor_num_simulation=800:actor_select_action_by_count=true:actor_select_action_by_softmax_count=false:actor_use_dirichlet_noise=false:actor_use_gumbel_noise=false
-```
-
-Note that the evaluations is generated during training in Atari games.
-Check `ms_pacman_mz_n50/analysis/*_Return.png` for the results.
-
-For more evaluation details, please refer to [this instructions](docs/Evaluation.md).
-
-### Console
-
-To interact with a trained model using [Go Text Protocol (GTP)](http://www.lysator.liu.se/~gunnar/gtp/).
-```bash
-# play with the "go_9x9_az_n200" model
-tools/quick-run.sh console go go_9x9_az_n200 -conf_str env_board_size=9:actor_num_simulation=800:actor_select_action_by_count=true:actor_select_action_by_softmax_count=false:actor_use_dirichlet_noise=false:actor_use_gumbel_noise=false
-```
-
-For more console details, please refer to [this instructions](docs/Console.md).
-
-## Development
-
-We are actively adding new algorithms, features, and games into MiniZero.
-
-The following work-in-progress features will be available in future versions:
-* Stochastic MuZero
-* Sampled MuZero
-
-We welcome developers to join the MiniZero community. 
-For more development tips, please refer to [this instructions](docs/Development.md).
-
-## References
-- [MiniZero: Comparative Analysis of AlphaZero and MuZero on Go, Othello, and Atari Games](https://arxiv.org/abs/2310.11305)
-- [Policy improvement by planning with Gumbel (Gumbel AlphaZero and Gumbel MuZero)](https://openreview.net/forum?id=bERaNdoegnO)
-- [Mastering Atari, Go, chess and shogi by planning with a learned model (MuZero)](https://doi.org/10.1038/s41586-020-03051-4)
-- [A general reinforcement learning algorithm that masters chess, shogi, and Go through self-play (AlphaZero)](https://doi.org/10.1126/science.aar6404)
-- [Mastering the game of Go without human knowledge (AlphaGo Zero)](https://doi.org/10.1038/nature24270)

@@ -31,6 +31,7 @@ public:
     inline int getActionSize() const { return action_size_; }
     inline int getNumValueHiddenChannels() const { return num_value_hidden_channels_; }
     inline int getDiscreteValueSize() const { return discrete_value_size_; }
+    inline int getNumDecoderOutputChannels() const { return num_decoder_output_channels_; }
     inline std::string getGameName() const { return game_name_; }
     inline std::string getNetworkTypeName() const { return network_type_name_; }
     inline std::string getNetworkFileName() const { return network_file_name_; }
@@ -49,6 +50,7 @@ protected:
     int action_size_;
     int num_value_hidden_channels_;
     int discrete_value_size_;
+    int num_decoder_output_channels_;
     std::string game_name_;
     std::string network_type_name_;
     std::string network_file_name_;

@@ -4,6 +4,7 @@
 #include "base_actor.h"
 #include "gumbel_zero.h"
 #include "mcts.h"
+#include "mcts_dump.h"
 #include "muzero_network.h"
 #include <memory>
 #include <string>
@@ -67,6 +68,7 @@ protected:
     utils::Rotation feature_rotation_;
     std::shared_ptr<network::AlphaZeroNetwork> alphazero_network_;
     std::shared_ptr<network::MuZeroNetwork> muzero_network_;
+    MCTSDump mcts_dump_;
 };
 
 } // namespace minizero::actor

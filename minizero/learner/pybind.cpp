@@ -57,6 +57,16 @@ PYBIND11_MODULE(minizero_py, m)
     m.def("get_nn_action_size", []() { return getEnvInstance().getPolicySize(); });
     m.def("get_nn_num_value_hidden_channels", []() { return config::nn_num_value_hidden_channels; });
     m.def("get_nn_discrete_value_size", []() { return kEnvInstance->getDiscreteValueSize(); });
+    m.def("use_state_consistency", []() { return config::learner_use_state_consistency; });
+    m.def("get_nn_state_consistency_params", []() -> py::object {
+        if (!config::learner_use_state_consistency) { return py::none(); }
+        return py::make_tuple(config::nn_state_consistency_proj_hid, config::nn_state_consistency_proj_out, config::nn_state_consistency_pred_hid, config::nn_state_consistency_pred_out);
+    });
+    m.def("use_decoder", []() { return config::learner_use_decoder; });
+    m.def("get_nn_num_decoder_output_channels", []() { return getEnvInstance().getNumDecoderOutputChannels(); });
+    m.def("get_decoder_output_at_inference", []() { return config::decoder_output_at_inference; });
+    m.def("get_decoder_loss_scale", []() { return config::decoder_loss_scale; });
+    m.def("get_decoder_clip_grad_value", []() { return config::decoder_clip_grad_value; });
     m.def("get_nn_type_name", []() { return config::nn_type_name; });
 
     py::class_<learner::DataLoader>(m, "DataLoader")
@@ -80,4 +90,53 @@ PYBIND11_MODULE(minizero_py, m)
                 data_loader.sampleData();
             },
             py::call_guard<py::gil_scoped_release>());
+
+    py::enum_<env::Player>(m, "Player")
+        .value("kPlayerNone", env::Player::kPlayerNone)
+        .value("kPlayer1", env::Player::kPlayer1)
+        .value("kPlayer2", env::Player::kPlayer2)
+        .value("kPlayerSize", env::Player::kPlayerSize)
+        .export_values();
+
+    py::class_<Action>(m, "Action")
+        .def(py::init<>())
+        .def(py::init<int, env::Player>())
+        .def("next_player", &Action::nextPlayer)
+        .def("get_action_id", &Action::getActionID)
+        .def("get_player", &Action::getPlayer);
+
+    py::class_<Environment>(m, "Env")
+        .def(py::init<>())
+        .def("to_string", &Environment::toString)
+        .def("is_terminal", &Environment::isTerminal)
+        .def("act", py::overload_cast<const Action&>(&Environment::act))
+        .def("act", py::overload_cast<const std::vector<std::string>&>(&Environment::act))
+        .def("get_legal_actions", &Environment::getLegalActions)
+        .def("get_features", [](Environment& env) {
+            return env.getFeatures();
+        })
+        .def("get_reward", &Environment::getReward)
+        .def("get_action_features", [](Environment& env, Action action) { return env.getActionFeatures(action); })
+#if ATARI
+        .def("reset", py::overload_cast<int>(&Environment::reset));
+#else
+        .def("reset", py::overload_cast<>(&Environment::reset));
+#endif
+
+    py::class_<EnvironmentLoader>(m, "EnvLoader")
+        .def(py::init<>())
+        .def("load_from_string", py::overload_cast<const std::string&>(&EnvironmentLoader::loadFromString))
+        .def("get_action", [](EnvironmentLoader& loader, int pos) { return loader.getActionPairs()[pos].first; })
+        .def("get_action_pairs_size", [](EnvironmentLoader& loader) { return loader.getActionPairs().size(); })
+        .def("to_string", &EnvironmentLoader::toString)
+        .def("get_tag", &EnvironmentLoader::getTag)
+        .def("get_policy", &EnvironmentLoader::getPolicy)
+        .def("get_value", &EnvironmentLoader::getValue)
+        .def("get_reward", &EnvironmentLoader::getReward)
+        .def("get_action_pairs_value", [](EnvironmentLoader& loader, int pos) { return loader.getActionPairs()[pos].second["V"]; });
+
+    m.def("copy_env", [](Environment env) {
+        Environment env_copy_ = env;
+        return env_copy_;
+    });
 }

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+env_cmakelists="$(dirname $(readlink -f "$0"))/../minizero/environment/CMakeLists.txt"
+support_games=($(awk '/target_include_directories/,/\)/' ${env_cmakelists} | sed 's|/|\n|g' | grep -v -E 'target|environment|PUBLIC|CMAKE_CURRENT_SOURCE_DIR|base|stochastic|)'))
+
 usage() {
     case "$1" in
     train)
@@ -7,7 +10,7 @@ usage() {
         echo "Launch a zero training session (incl. zero-server and zero-workers) to train a model for specific game."
         echo ""
         echo "Required arguments:"
-        echo "  GAME_TYPE: $(find ./ ../ -maxdepth 2 -name build.sh -exec grep -m1 support_games {} \; -quit | sed -E 's/.+\("|"\).*//g;s/" "/, /g')"
+        echo "  GAME_TYPE: ${support_games[@]}"
         echo "  CONF_FILE|ALGORITHM: set the configure file (*.cfg) to use, or one of supported zero algorithms: az, mz, gaz, gmz"
         echo "  END_ITER: the total number of iterations for training"
         echo ""
@@ -42,7 +45,7 @@ usage() {
         echo "Launch the GTP shell console to interact with a trained model."
         echo ""
         echo "Required arguments:"
-        echo "  GAME_TYPE: $(find ./ ../ -maxdepth 2 -name build.sh -exec grep -m1 support_games {} \; -quit | sed -E 's/.+\("|"\).*//g;s/" "/, /g')"
+        echo "  GAME_TYPE: ${support_games[@]}"
         echo "  FOLDER|MODEL: set the model folder, OR a model file (*.pt)"
         echo "  CONF_FILE: set the configure file (*.cfg) to use"
         echo ""
@@ -156,7 +159,6 @@ console) # FOLDER|MODEL [CONF_FILE]
     exit 1
     ;;
 esac
-eval $(grep -m1 support_games scripts/build.sh)
 if ! printf "%s\n" "${support_games[@]}" | grep -q "^$game$"; then
     if [[ $1 == -h || $1 == --help ]]; then
         usage $game # assume usage for MODE
@@ -207,7 +209,7 @@ while [[ $1 ]]; do
     shift
 done
 
-# ================================ STEUP ================================
+# ================================ SETUP ================================
 
 git_info=$(git describe --abbrev=6 --dirty --always --exclude '*' 2>/dev/null || echo xxxxxx)
 session_name=minizero_$game.$git_info.$mode.$(date '+%Y%m%d%H%M%S')
@@ -364,6 +366,13 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
         fi
     fi
 
+    if [[ ! $batch_size && $zero_num_parallel_games ]]; then
+        batch_size=$zero_num_parallel_games # assume sp always taks 1 GPU when using quick-run
+    fi
+    if [[ ! $num_threads && $zero_num_threads ]]; then
+        num_threads=$zero_num_threads
+    fi
+
     if [[ ! $zero_server_port ]]; then
         zero_server_port=$({ grep zero_server_port= $conf_file || echo =$((58000+RANDOM%2000)); } | sed -E "s/^[^=]*=| *[#].*$//g")
     fi
@@ -414,8 +423,8 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
 
     # launch zero server
     {
-        $launch scripts/zero-server.sh $game $conf_file $zero_end_iteration -n "$train_dir" -conf_str "$conf_str"
-    } 2>&1 | tee >(watchdog "Worker Disconnection|^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z]+Error") | colorize OUT_TRAIN &
+        $launch scripts/zero-server.sh $game $conf_file $zero_end_iteration -n "$train_dir" -g ${CUDA_VISIBLE_DEVICES//,/} -conf_str "$conf_str"
+    } 2>&1 | tee >(watchdog "Worker Disconnection|^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN &
     PID[$!]=server
     server_pid=$!
 
@@ -443,7 +452,7 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
             [[ $sp_progress == true ]] && sp_program_quiet=false || sp_program_quiet=true
             [[ $sp_conf_str != *program_quiet* ]] && sp_conf_str+=${sp_conf_str:+:}program_quiet=$sp_program_quiet
             $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port sp -b ${batch_size:-64} -c ${num_threads:-4} -g $GPU ${sp_conf_str:+-conf_str "$sp_conf_str"}
-        } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z]+Error") | colorize OUT_TRAIN_SP &
+        } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_SP &
         PID[$!]=sp$GPU
         unset sp_progress # only show the progress of the first sp
         sleep 1
@@ -453,7 +462,7 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
     OP_CUDA_VISIBLE_DEVICES=${OP_CUDA_VISIBLE_DEVICES:-$CUDA_VISIBLE_DEVICES}
     {
         $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port op -g ${OP_CUDA_VISIBLE_DEVICES//,/} ${op_conf_str:+-conf_str "$op_conf_str"}
-    } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z]+Error") | colorize OUT_TRAIN_OP &
+    } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_OP &
     PID[$!]=op
 
     trap 'eval "log() { echo -en \"\r\" >&2; $(type log | tail -n+3); echo -en \"\r\" >&2; }"' SIGUSR1 # workaround for exec -it issue
@@ -635,7 +644,7 @@ elif [[ $mode == console ]]; then # ================================ CONSOLE ===
         log INFO "Launch console with gogui-server at tcp://0.0.0.0:$port" # displaying this will trigger VS code to automatically start port forwarding
         {
             $launch gogui-server -port $port -loop -verbose "$executable -mode console -conf_file ${conf_file} -conf_str ${conf_str}"
-        } 2>&1 | tee >(watchdog "^Address already in use|^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z]+Error") | colorize OUT_CONSOLE_GOGUI &
+        } 2>&1 | tee >(watchdog "^Address already in use|^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_CONSOLE_GOGUI &
         PID[$!]=console
 
         trap 'log ERR "Console failed to start correctly"' SIGUSR1

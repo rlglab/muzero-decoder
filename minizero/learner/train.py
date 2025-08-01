@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+from minizero.utils.decoder_visualization_utils import PlottingUtils
 from minizero.network.py.create_network import create_network
 from tools.analysis import analysis
 
@@ -22,15 +23,17 @@ class MinizeroDadaLoader:
 
         # allocate memory
         self.sampled_index = np.zeros(py.get_batch_size() * 2, dtype=np.int32)
-        self.features = np.zeros(py.get_batch_size() * py.get_nn_num_input_channels() * py.get_nn_input_channel_height() * py.get_nn_input_channel_width(), dtype=np.float32)
         self.loss_scale = np.zeros(py.get_batch_size(), dtype=np.float32)
         self.value_accumulator = np.ones(1) if py.get_nn_discrete_value_size() == 1 else np.arange(-int(py.get_nn_discrete_value_size() / 2), int(py.get_nn_discrete_value_size() / 2) + 1)
         if py.get_nn_type_name() == "alphazero":
+            self.features = np.zeros(py.get_batch_size() * py.get_nn_num_input_channels() * py.get_nn_input_channel_height() * py.get_nn_input_channel_width(), dtype=np.float32)
             self.action_features = None
             self.policy = np.zeros(py.get_batch_size() * py.get_nn_action_size(), dtype=np.float32)
             self.value = np.zeros(py.get_batch_size() * py.get_nn_discrete_value_size(), dtype=np.float32)
             self.reward = None
         else:
+            self.features = np.zeros(py.get_batch_size() * (py.get_muzero_unrolling_step() + 1) * py.get_nn_num_input_channels()
+                                     * py.get_nn_input_channel_height() * py.get_nn_input_channel_width(), dtype=np.float32)
             self.action_features = np.zeros(py.get_batch_size() * py.get_muzero_unrolling_step() * py.get_nn_num_action_feature_channels()
                                             * py.get_nn_hidden_channel_height() * py.get_nn_hidden_channel_width(), dtype=np.float32)
             self.policy = np.zeros(py.get_batch_size() * (py.get_muzero_unrolling_step() + 1) * py.get_nn_action_size(), dtype=np.float32)
@@ -49,7 +52,7 @@ class MinizeroDadaLoader:
 
     def sample_data(self, device='cpu'):
         self.data_loader.sample_data(self.features, self.action_features, self.policy, self.value, self.reward, self.loss_scale, self.sampled_index)
-        features = torch.FloatTensor(self.features).view(py.get_batch_size(), py.get_nn_num_input_channels(), py.get_nn_input_channel_height(), py.get_nn_input_channel_width()).to(device)
+        features = torch.FloatTensor(self.features).view(py.get_batch_size(), -1, py.get_nn_num_input_channels(), py.get_nn_input_channel_height(), py.get_nn_input_channel_width()).to(device)
         action_features = None if self.action_features is None else torch.FloatTensor(self.action_features).view(py.get_batch_size(),
                                                                                                                  -1,
                                                                                                                  py.get_nn_num_action_feature_channels(),
@@ -58,10 +61,11 @@ class MinizeroDadaLoader:
         policy = torch.FloatTensor(self.policy).view(py.get_batch_size(), -1, py.get_nn_action_size()).to(device)
         value = torch.FloatTensor(self.value).view(py.get_batch_size(), -1, py.get_nn_discrete_value_size()).to(device)
         reward = None if self.reward is None else torch.FloatTensor(self.reward).view(py.get_batch_size(), -1, py.get_nn_discrete_value_size()).to(device)
+        decoder = features[:, :, -py.get_nn_num_decoder_output_channels():].to(device)
         loss_scale = torch.FloatTensor(self.loss_scale / np.amax(self.loss_scale)).to(device)
         sampled_index = self.sampled_index
 
-        return features, action_features, policy, value, reward, loss_scale, sampled_index
+        return features, action_features, policy, value, reward, decoder, loss_scale, sampled_index
 
     def update_priority(self, sampled_index, batch_values):
         batch_values = (batch_values * self.value_accumulator).sum(axis=1)
@@ -90,6 +94,9 @@ class Model:
                                       py.get_nn_action_size(),
                                       py.get_nn_num_value_hidden_channels(),
                                       py.get_nn_discrete_value_size(),
+                                      py.get_nn_state_consistency_params() if py.use_state_consistency() else None,
+                                      py.get_nn_num_decoder_output_channels() if py.use_decoder() else 0,
+                                      py.get_decoder_output_at_inference() if py.use_decoder() else False,
                                       py.get_nn_type_name())
         self.network.to(self.device)
         self.optimizer = optim.SGD(self.network.parameters(),
@@ -118,7 +125,7 @@ class Model:
         torch.jit.script(self.network.module).save(f"{training_dir}/model/weight_iter_{self.training_step}.pt")
 
 
-def calculate_loss(network_output, label_policy, label_value, label_reward, loss_scale):
+def calculate_loss(network_output, label_policy, label_value, label_reward, label_decoder, loss_scale):
     # policy
     if py.use_gumbel():
         loss_policy = (nn.functional.kl_div(nn.functional.log_softmax(network_output["policy_logit"], dim=1), label_policy, reduction='none').sum(dim=1) * loss_scale).mean()
@@ -136,7 +143,19 @@ def calculate_loss(network_output, label_policy, label_value, label_reward, loss
     if label_reward is not None and "reward_logit" in network_output:
         loss_reward = -((label_reward * nn.functional.log_softmax(network_output["reward_logit"], dim=1)).sum(dim=1) * loss_scale).mean()
 
-    return loss_policy, loss_value, loss_reward
+    # state consistency
+    loss_state_consistency = 0
+    if py.use_state_consistency() and "dynamic_proj" in network_output and "observation_proj" in network_output:
+        dynamic_proj = nn.functional.normalize(network_output["dynamic_proj"], p=2., dim=-1, eps=1e-5)
+        observation_proj = nn.functional.normalize(network_output["observation_proj"], p=2., dim=-1, eps=1e-5)
+        loss_state_consistency = -((dynamic_proj * observation_proj).sum(dim=1) * loss_scale).mean()
+
+    # decoder
+    loss_decoder = 0
+    if py.use_decoder() and label_decoder is not None and "decoder_output" in network_output:
+        loss_decoder = nn.functional.mse_loss(network_output["decoder_output"], label_decoder, reduction='none').mean()  # TODO: loss_scale?
+
+    return loss_policy, loss_value, loss_reward, loss_state_consistency, loss_decoder
 
 
 def add_training_info(training_info, key, value):
@@ -160,13 +179,14 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
     data_loader.load_data(training_dir, start_iter, end_iter)
 
     training_info = {}
+    decoder_visualizer = PlottingUtils(training_dir, display_interval=1) if py.use_decoder() else None
     for i in range(1, py.get_training_step() + 1):
         model.optimizer.zero_grad()
-        features, action_features, label_policy, label_value, label_reward, loss_scale, sampled_index = data_loader.sample_data(model.device)
+        features, action_features, label_policy, label_value, label_reward, label_decoder, loss_scale, sampled_index = data_loader.sample_data(model.device)
 
         if py.get_nn_type_name() == "alphazero":
             network_output = model.network(features)
-            loss_policy, loss_value, _ = calculate_loss(network_output, label_policy[:, 0], label_value[:, 0], None, loss_scale)
+            loss_policy, loss_value, _, _, _ = calculate_loss(network_output, label_policy[:, 0], label_value[:, 0], None, None, loss_scale)
             loss = loss_policy + py.get_value_loss_scale() * loss_value
 
             # record training info
@@ -174,38 +194,68 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
             add_training_info(training_info, 'accuracy_policy', calculate_accuracy(network_output["policy_logit"], label_policy[:, 0], py.get_batch_size()))
             add_training_info(training_info, 'loss_value', loss_value.item())
         elif py.get_nn_type_name() == "muzero":
-            network_output = model.network(features)
+            network_output = model.network(features[:, 0])
+            if py.use_decoder():
+                if "decoder_output" not in network_output:
+                    network_output["decoder_output"] = model.network.module.decoder_network(network_output["hidden_state"])
+                decoder_outputs = []
+                decoder_outputs.append(network_output["decoder_output"])
             batch_values = network_output['value'].to('cpu').detach().numpy()
-            loss_step_policy, loss_step_value, loss_step_reward = calculate_loss(network_output, label_policy[:, 0], label_value[:, 0], None, loss_scale)
+            loss_step_policy, loss_step_value, loss_step_reward, _, loss_step_decoder = calculate_loss(
+                network_output, label_policy[:, 0], label_value[:, 0], None, label_decoder[:, 0], loss_scale)
             add_training_info(training_info, 'loss_policy_0', loss_step_policy.item())
             add_training_info(training_info, 'accuracy_policy_0', calculate_accuracy(network_output["policy_logit"], label_policy[:, 0], py.get_batch_size()))
             add_training_info(training_info, 'loss_value_0', loss_step_value.item())
+            if py.use_decoder():
+                add_training_info(training_info, 'loss_decoder_0', loss_step_decoder.item())
             loss_policy = loss_step_policy
             loss_value = loss_step_value
             loss_reward = loss_step_reward
+            loss_state_consistency = 0
+            loss_decoder = loss_step_decoder
             for i in range(py.get_muzero_unrolling_step()):
                 network_output = model.network(network_output["hidden_state"], action_features[:, i])
+                if py.use_state_consistency():
+                    network_output["dynamic_proj"] = model.network.module.forward_consistency_proj(network_output["hidden_state"], with_grad_=True)["proj"]
+                    network_output["observation_proj"] = model.network.module.forward_consistency_proj(features[:, i + 1], with_grad_=False)["proj"]
+                if py.use_decoder():
+                    if "decoder_output" not in network_output:
+                        network_output["decoder_output"] = model.network.module.decoder_network(network_output["hidden_state"])
+                    decoder_outputs.append(network_output["decoder_output"])
                 batch_values = np.concatenate((batch_values, network_output['value'].to('cpu').detach().numpy()), axis=0)
-                loss_step_policy, loss_step_value, loss_step_reward = calculate_loss(network_output, label_policy[:, i + 1], label_value[:, i + 1], label_reward[:, i], loss_scale)
+                loss_step_policy, loss_step_value, loss_step_reward, loss_step_state_consistency, loss_step_decoder = calculate_loss(
+                    network_output, label_policy[:, i + 1], label_value[:, i + 1], label_reward[:, i], label_decoder[:, i + 1], loss_scale)
                 add_training_info(training_info, f'loss_policy_{i+1}', loss_step_policy.item() / py.get_muzero_unrolling_step())
                 add_training_info(training_info, f'accuracy_policy_{i+1}', calculate_accuracy(network_output["policy_logit"], label_policy[:, i + 1], py.get_batch_size()))
                 add_training_info(training_info, f'loss_value_{i+1}', loss_step_value.item() / py.get_muzero_unrolling_step())
                 if "reward_logit" in network_output:
                     add_training_info(training_info, f'loss_reward_{i+1}', loss_step_reward.item() / py.get_muzero_unrolling_step())
+                if py.use_state_consistency():
+                    add_training_info(training_info, f'loss_state_consistency_{i+1}', loss_step_state_consistency.item() / py.get_muzero_unrolling_step())
+                if py.use_decoder():
+                    add_training_info(training_info, f'loss_decoder_{i+1}', loss_step_decoder.item() / py.get_muzero_unrolling_step())
                 loss_policy += loss_step_policy / py.get_muzero_unrolling_step()
                 loss_value += loss_step_value / py.get_muzero_unrolling_step()
                 loss_reward += loss_step_reward / py.get_muzero_unrolling_step()
+                loss_state_consistency += loss_step_state_consistency / py.get_muzero_unrolling_step()
+                loss_decoder += loss_step_decoder / py.get_muzero_unrolling_step()
                 network_output["hidden_state"].register_hook(lambda grad: grad / 2)
             if py.use_per():
                 data_loader.update_priority(sampled_index, batch_values)
-            loss = loss_policy + py.get_value_loss_scale() * loss_value + loss_reward
+            loss = loss_policy + py.get_value_loss_scale() * loss_value + loss_reward + loss_state_consistency + py.get_decoder_loss_scale() * loss_decoder
 
             add_training_info(training_info, 'loss_policy', loss_policy.item())
             add_training_info(training_info, 'loss_value', loss_value.item())
             if "reward_logit" in network_output:
                 add_training_info(training_info, 'loss_reward', loss_reward.item())
+            if py.use_state_consistency():
+                add_training_info(training_info, 'loss_state_consistency', loss_state_consistency.item())
+            if py.use_decoder():
+                add_training_info(training_info, 'loss_decoder', loss_decoder.item())
 
         loss.backward()
+        if py.use_decoder() and py.get_decoder_clip_grad_value() > 0:
+            torch.nn.utils.clip_grad_value_(model.network.module.decoder_network.parameters(), py.get_decoder_clip_grad_value())
         model.optimizer.step()
         model.scheduler.step()
 
@@ -215,6 +265,8 @@ def train(model, training_dir, data_loader, start_iter, end_iter):
             for loss in training_info:
                 eprint("\t{}: {}".format(loss, round(training_info[loss] / py.get_training_display_step(), 5)))
             training_info = {}
+            if py.use_decoder():
+                decoder_visualizer.plot_states(label_decoder, decoder_outputs, end_iter, model.training_step, py)
 
     model.save_model(training_dir)
     print("Optimization_Done", model.training_step, flush=True)

@@ -93,6 +93,7 @@ void ZeroActor::afterNNEvaluation(const std::shared_ptr<NetworkOutput>& network_
         assert(false);
     }
     if (leaf_node == getMCTS()->getRootNode()) { addNoiseToNodeChildren(leaf_node); }
+    if (isSearchDone() && config::actor_dump_mcts_tree) { mcts_dump_.dumpMCTS(env_, getMCTS()->getRootNode()); }
     if (isSearchDone()) { handleSearchDone(); }
     if (config::actor_use_gumbel) { gumbel_zero_.sequentialHalving(getMCTS()); }
 }

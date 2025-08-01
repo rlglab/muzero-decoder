@@ -94,6 +94,7 @@ public:
     virtual int getHiddenChannelWidth() const = 0;
     virtual int getPolicySize() const = 0;
     virtual int getDiscreteValueSize() const = 0;
+    virtual int getNumDecoderOutputChannels() const { return getNumInputChannels(); }
     virtual int getRotatePosition(int position, utils::Rotation rotation) const = 0;
     virtual int getRotateAction(int action_id, utils::Rotation rotation) const = 0;
     virtual std::string toString() const = 0;
